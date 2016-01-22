@@ -1,9 +1,11 @@
+module Vigenere where
+
 import Data.List
 import Data.Char
 import Control.Monad
 
 -----------------------
--- Character encodings
+-- Encoding/Decoding strings
 
 alphaOrder :: Char -> Int
 alphaOrder x = ord x - ord 'a'
@@ -36,6 +38,10 @@ decrypt key = encrypt $ map (\n -> (-n) `mod` 26) key
 alphaProb :: [Double]
 alphaProb = (/100) <$> [8.15, 1.44, 2.76, 3.79, 13.11, 2.92, 1.99, 5.26, 6.35, 0.13, 0.42, 3.39, 2.54, 7.10, 8.00, 1.98, 0.12, 6.83, 6.10, 10.47, 2.46, 0.92, 1.54, 0.17, 1.98, 0.08]
 
+
+--------------------------------
+-- (Slow and NAIVE) Bayesian analysis
+
 prob :: [Int] -> Double
 prob str = product $ map (\n -> alphaProb !! n) str
 
@@ -44,15 +50,17 @@ probGivenKey :: [Int] -> [Int] -> Double
 probGivenKey key str = prob $ decrypt key str
 
 -- Ciphertext -> Prob
-totalProb :: [Int]  -> Double
-totalProb e = (1/26)^3 * (sum $ map (\k -> probGivenKey k e) $ keys)
+totalProb :: Int -> [Int]  -> Double
+totalProb n e = (1/26)^n * (sum $ map (\k -> probGivenKey k e) $ keys n)
 
-likelihoodGivenKey :: [Int] ->  [Int] -> Double
-likelihoodGivenKey key str = probGivenKey key str / totalProb str
+likelihoodGivenKey :: Int -> [Int] ->  [Int] -> Double
+likelihoodGivenKey n key str = probGivenKey key str / totalProb n str
 
-keys :: [[Int]]
-keys = replicateM 3 [0..25]
+keys :: Int -> [[Int]]
+keys n = replicateM n [0..25]
 
+----------------------------------------
+-- Frequency analysis tools based on index of coincidence and mutual index of coincidence
 
 count :: (Eq a) => [a] -> a -> Int
 count list x = length . filter (==x) $ list
@@ -65,22 +73,23 @@ ic str = fromIntegral (sum . map (\c -> c*(c-1)) $ freq) / fromIntegral (n*(n-1)
 icNorm :: Double
 icNorm = sum . map (\p -> p^2) $ alphaProb
 
---result = take 50 $ reverse $ sortOn fst $  map (\k -> ((ic $ decrypt k sample) - icNorm, k)) keys
-
-
 icForKeyLength :: Int -> [Int] -> Double
 icForKeyLength n str = average $ map ic $ transpose $ split n str
 
+split :: Int -> [a] -> [[a]]
 split _ [] = []
 split n str = take n str : split n (drop n str)
 
+average :: [Double] -> Double
 average freq = sum freq / (fromIntegral (length freq))
 
-icList :: [Int] -> [(Int,Double)]
-icList str = map (\n -> (n, icForKeyLength n str)) [1..20]
+-- Max key length -> Ciphertext -> List of IC
+icList :: Int -> [Int] -> [(Int,Double)]
+icList n str = map (\n -> (n, icForKeyLength n str)) [1..n]
 
-icDiffList :: [Int] -> [(Int,Double)]
-icDiffList = map (\(n,ic) -> (n,abs (ic-icNorm))) . icList
+-- Max key length -> Ciphertext -> List of IC diff (from IC norm)
+icDiffList :: Int -> [Int] -> [(Int,Double)]
+icDiffList n = map (\(n,ic) -> (n,abs (ic-icNorm))) . icList n
 
 freqs :: [Int] -> [Double]
 freqs str = (/ fromIntegral (length str)) <$> map (fromIntegral . count str) [0..25] 
@@ -97,17 +106,76 @@ mcList str1 str2 = zip [0..25] $ mc str1 <$> map (\n -> map (shift (-n)) str2) [
 mcDiffList :: [Int] -> [Int] -> [(Int,Double)]
 mcDiffList str1 str2 = map (\(n,mc) -> (n,abs (mc-mcNorm))) $ mcList str1 str2
 
+-----------------------------------------------
+-- Finding probable key length
 
---------------------------------------
+-- | standard extendedGCD algorithm
+-- gives result in (a,b,d), an+bm=d
+extendedGCD :: Int -> Int -> (Int,Int,Int)
+extendedGCD a b = if b==0
+                  then (1,0,a)
+                  else (y,x-(a `div` b)*y,d)
+  where (x,y,d) = extendedGCD b (a `mod` b)
 
-sample = encrypt (encode "key") $ encode "therearemorethingsinheavenandearthhoratiothanyouhavedreamtofinyourphilosophy"
+gcdOver :: [Int] -> Int
+gcdOver (x:[]) = x
+gcdOver (x:xs) = gcd x (gcdOver xs)
+  where gcd a b = (\(_,_,d) -> d) $ extendedGCD a b
 
-sample1 = encode "therearemorethingsinheavenandearthhoratiothanyouhavedreamtofinyourphilosophy"
 
-sample2 = encode $ map toLower $ "WZVFINLSOHCWAQMERTBJAHIHVPEIEHZCSVMKEIAJXMUHVJTSGHNCAWLVMAANWBQRJYLVVQCBBWLZYGGRZCBQGVZRGZEQRVLVSAQSASCHHZYTBWDSORSBSEEVEGGHVNLSEHWRVQKSFTVWDOQQSGTCGXNSFRVTZNIHNGNWMFYSVQEHNQHNSAGLOHUHYJPOSDXCBNXYZUTKPOYLGVHIGKKIGSMTEUEHOCEFSEGEEVWHVRRJZSUHSOFFSEDIQHNWAJMESEERSBZLRULSJHHZNVWYPCBXHRSRVKSEURPRNBQROEUHNTRHPMPRLVHSRSCRYDFWQDVGAYPTUHNHUHTCPAFXNSBIQRVIAJWRNLWPNHNLJKBXPUMEJRNHUWLVERBXXZRRJXPTGLJUHSEEOPVFGWAJXYPDNLOWRVAYPNFXZRRQPPLWULPSEDFSTTJLPVCLRBPYRVNOAFPFDEOBD"
+possibleMultiples :: [(Int,Double)] -> [Int]
+possibleMultiples = map fst . filter ((<0.01) . snd) 
 
-sample3 = encode $ map toLower $ "LIVITCSWPIYVEWHEVSRIQMXLEYVEOIEWHRXEXIPFEMVEWHKVSTYLXZIXLIKIIXPIJVSZEYPERRGERIMWQLMGLMXQERIWGPSRIHMXQEREKIETXMJTPRGEVEKEITREWHEXXLEXXMZITWAWSQWXSWEXTVEPMRXRSJGSTVRIEYVIEXCVMUIMWERGMIWXMJMGCSMWXSJOMIQXLIVIQIVIXQSVSTWHKPEGARCSXRWIEVSWIIBXVIZMXFSJXLIKEGAEWHEPSWYSWIWIEVXLISXLIVXLIRGEPIRQIVIIBGIIHMWYPFLEVHEWHYPSRRFQMXLEPPXLIECCIEVEWGISJKTVWMRLIHYSPHXLIQIMYLXSJXLIMWRIGXQEROIVFVIZEVAEKPIEWHXEAMWYEPPXLMWYRMWXSGSWRMHIVEXMSWMGSTPHLEVHPFKPEZINTCMXIVJSVLMRSCMWMSWVIRCIGXMWYMX"
+-- Max keylength -> Ciphertext -> Probable key
+probableLength :: Int -> [Int] -> Int
+probableLength n str = gcdOver $ possibleMultiples $ sortOn snd $ icDiffList n str
 
-sample4 = encode $ filter isLower . map toLower $ "In physics, a gauge theory is a type of field theory in which the Lagrangian is invariant under a continuous group of local transformations.The term gauge refers to redundant degrees of freedom in the Lagrangian. The transformations between possible gauges, called gauge transformations, form a Lie group—referred to as the symmetry group or the gauge group of the theory. Associated with any Lie group is the Lie algebra of group generators. For each group generator there necessarily arises a corresponding vector field called the gauge field. Gauge fields are included in the Lagrangian to ensure its invariance under the local group transformations (called gauge invariance). When such a theory is quantized, the quanta of the gauge fields are called gauge bosons. If the symmetry group is non-commutative, the gauge theory is referred to as non-abelian, the usual example being the Yang–Mills theory.Many powerful theories in physics are described by Lagrangians that are invariant under some symmetry transformation groups. When they are invariant under a transformation identically performed at every point in the space in which the physical processes occur, they are said to have a global symmetry. The requirement of local symmetry, the cornerstone of gauge theories, is a stricter constraint. In fact, a global symmetry is just a local symmetry whose group's parameters are fixed in space-time.Gauge theories are important as the successful field theories explaining the dynamics of elementary particles. Quantum electrodynamics is an abelian gauge theory with the symmetry group U(1) and has one gauge field, the electromagnetic four-potential, with the photon being the gauge boson. The Standard Model is a non-abelian gauge theory with the symmetry group U(1)×SU(2)×SU(3) and has a total of twelve gauge bosons: the photon, three weak bosons and eight gluons.Gauge theories are also important in explaining gravitation in the theory of general relativity. Its case is somewhat unique in that the gauge field is a tensor, the Lanczos tensor. Theories of quantum gravity, beginning with gauge gravitation theory, also postulate the existence of a gauge boson known as the graviton. Gauge symmetries can be viewed as analogues of the principle of general covariance of general relativity in which the coordinate system can be chosen freely under arbitrary diffeomorphisms of spacetime. Both gauge invariance and diffeomorphism invariance reflect a redundancy in the description of the system. An alternative theory of gravitation, gauge theory gravity, replaces the principle of general covariance with a true gauge principle with new gauge fields.Historically, these ideas were first stated in the context of classical electromagnetism and later in general relativity. However, the modern importance of gauge symmetries appeared first in the relativistic quantum mechanics of electrons – quantum electrodynamics, elaborated on below. Today, gauge theories are useful in condensed matter, nuclear and high energy physics among other subfields."
 
-sample5 = encrypt [1,2,3,4,5] sample4
+-----------------------------------------
+-- Finding probable gap between key columns (using mutual index of coincidence)
+
+trd :: (a,b,c) -> c
+trd (_,_,c) = c
+
+mutualIndices :: Int -> [(Int,Int)]
+mutualIndices 2 = [(0,1)]
+mutualIndices n = ((\m -> (m,n-1)) <$> [0..n-2]) ++ mutualIndices (n-1)
+
+mcDiffListAll :: Int -> [Int] -> [(Int,Int,[(Int,Double)])]
+mcDiffListAll n str = map (\(n,m) -> (n,m,mcDiffList (col!!n) (col!!m))) $ mutualIndices n
+  where col = transpose $ split n str
+
+processDiffMC :: [(Int,Int,[(Int,Double)])] -> [(Int,Int,[(Int,Double)])]
+processDiffMC = map (\(n,m,list) -> (n,m, sortOn snd $ filter ((<0.01) . snd) list))
+
+probableDisplacements :: Int -> [Int] -> [Int]
+probableDisplacements n str = [0] ++ (
+                              map snd . sort . map (\(_,m,displacement:_) -> (m,fst displacement)) . filter (\(n,_,_) -> n==0) . processDiffMC . mcDiffListAll n $ str )
+
+
+------------------------------------------
+-- Finding the systematic rotation of all columns (the rotation of column 1)
+
+-- Shift amount -> Key displacemens -> Ciphertext -> Cleartext
+rotDecrypt :: Int -> [Int] -> [Int] -> [Int]
+rotDecrypt n key = decrypt (map (shift n) key)
+
+sumProbDiff :: [Int] -> Double
+sumProbDiff str = sum . map abs . zipWith (-) (freqs str) $ alphaProb
+
+rotProbDiffList :: [Int] -> [Int] -> [(Int,Double)]
+rotProbDiffList key str = map (\n -> (n,sumProbDiff $ rotDecrypt n key str)) [0..25]
+
+--------------------------------------------
+leastDiffShift :: [(Int,Double)] -> Int
+leastDiffShift = fst . head . sortOn snd
+
+probableKey :: [Int] -> [Int]
+probableKey str = map (shift (leastDiffShift dat1)) displacements
+  where
+    dat1 = rotProbDiffList displacements str
+    displacements = probableDisplacements key_length str
+    key_length = probableLength 20 str
+
+probableCleartext :: [Int] -> [Int]
+probableCleartext str = decrypt (probableKey str) str
